@@ -1,0 +1,104 @@
+# Experiment matrix: OFAT (one-factor-at-a-time) axes + targeted interaction cells.
+#
+# Design:
+#   - `baseline` is the reference config every OFAT axis deviates from.
+#   - Each axis in `ofat` varies ONE knob while all others stay at baseline.
+#     matrix.py emits the baseline once, then one config per non-baseline level.
+#   - `interactions` are explicit multi-knob cells where a crossover is expected.
+#   - `workloads` lists which workload shapes (configs/workloads.yaml) each cell
+#     runs against. Energy-headline cells set `repeats` > 1.
+#   - `invalid_combos` are pruned by matrix.py (logged, not silently dropped).
+#
+# Model resolution (see models: block) maps precision -> HF id / local path.
+
+model_family: llama-3.1-8b-instruct
+
+models:
+  # Resolved from /data/hf_cache (read) or downloaded to $HF_HUB_CACHE on first use.
+  bf16:        { id: "unsloth/Llama-3.1-8B-Instruct", quantization: null }
+  fp8-dynamic: { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic", quantization: "fp8" }
+  fp8-static:  { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8", quantization: "fp8" }
+  # fp8+fp8-kv reuses the fp8-static weights but adds --kv-cache-dtype fp8.
+
+speculative_models:
+  eagle3: "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
+  ngram: null   # no draft model; n-gram proposer is built-in
+
+baseline:
+  precision: bf16
+  speculative: none          # none | ngram | eagle3
+  chunked_prefill: true      # vLLM V1 default
+  max_num_seqs: 256          # continuous batching default
+  concurrency: 16
+  kv_cache_dtype: auto
+
+ofat:
+  precision:
+    levels: [bf16, fp8-dynamic, fp8-static, fp8-kv]   # fp8-kv => fp8-static weights + fp8 KV
+  speculative:
+    levels: [none, ngram, eagle3]
+  chunked_prefill:
+    levels: [true, false]
+  max_num_seqs:
+    levels: [1, 32, 256]       # 1 = effectively serialized (no continuous batching)
+  concurrency:
+    levels: [1, 16, 256]       # trimmed sweep for OFAT (cost control)
+
+# Explicit interaction cells (the blog hooks). Each lists the knobs it pins.
+interactions:
+  - name: eagle3_x_concurrency
+    description: "Spec-decode crossover: EAGLE-3 helps at low concurrency, may hurt at high."
+    fixed: { precision: bf16, speculative: eagle3 }
+    sweep: { concurrency: [1, 4, 16, 64, 256] }   # fine sweep only here
+    workloads: [chat, long_decode]
+    repeats: 1
+
+  - name: fp8_x_maxseqs
+    description: "FP8 frees KV memory -> can raise the continuous-batching ceiling on 48 GB."
+    fixed: { precision: fp8-static }
+    sweep: { max_num_seqs: [256, 512, 1024] }
+    workloads: [saturation]
+    repeats: 1
+
+  - name: fp8kv_energy
+    description: "Energy headline: tokens/joule for BF16 vs FP8 vs FP8+FP8-KV at steady decode."
+    fixed: { concurrency: 16 }
+    sweep: { precision: [bf16, fp8-static, fp8-kv] }
+    workloads: [long_decode]
+    repeats: 5                 # energy repeats -> median + IQR
+
+  - name: eagle3_energy
+    description: "Energy headline: does spec-decode improve tokens/joule at low concurrency?"
+    fixed: { concurrency: 1, precision: bf16 }
+    sweep: { speculative: [none, eagle3] }
+    workloads: [long_decode]
+    repeats: 5
+
+  - name: chunked_x_longprompt
+    description: "Chunked prefill effect isolated on the prefill-heavy workload."
+    fixed: { precision: bf16 }
+    sweep: { chunked_prefill: [true, false] }
+    workloads: [long_prompt]
+    repeats: 1
+
+# OFAT axes run against these workloads unless an axis overrides it.
+ofat_workloads: [chat, long_prompt, long_decode, saturation]
+
+# Combos that are invalid on vLLM V1 / this setup. matrix.py prunes + LOGS them
+# (never silent). NOTE: EAGLE-3 × chunked-prefill is NOT listed here — it is a
+# *dependency*, handled by normalize_dependencies() in matrix.py (eagle3 forces
+# chunked_prefill=False) so the EAGLE-3 cells survive instead of being dropped.
+#
+# List here only genuinely un-runnable combos. Each entry's `when` must match ALL
+# its keys against a config's knobs to prune it.
+invalid_combos:
+  # n-gram speculative decoding needs a real decode window to propose from; at
+  # max_num_seqs=1 with the prefill-heavy long_prompt shape it degenerates, but
+  # that is a workload interaction, not a hard invalid — left out on purpose.
+  # (Kept empty of structural prunes for now; unit tests plant their own combo.)
+  []
+
+# Cost-control guardrails enforced by cli.py / runner.py.
+budget:
+  gpu_hours_ceiling: 20
+  per_run_wallclock_cap_s: 1200   # abort + log a run that overshoots

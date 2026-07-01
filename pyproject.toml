@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-optimization-bench"
+version = "0.1.0"
+description = "Reproducible latency/throughput/energy benchmarks for vLLM inference optimizations on NVIDIA L40S"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "vedanti02" }]
+keywords = ["vllm", "llm", "inference", "benchmark", "l40s", "fp8", "speculative-decoding", "energy"]
+
+# NOTE: vllm + torch (CUDA build) are installed via pip inside the SLURM GPU
+# allocation (module load cuda-12.4) — they are intentionally NOT pinned here so
+# the CPU-side tooling (matrix/store/analyze) installs cleanly on any host.
+dependencies = [
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "matplotlib>=3.7",
+    "pynvml>=11.5",
+]
+
+[project.optional-dependencies]
+# NOTE: do NOT `pip install .[gpu]` on the Babel L40S nodes — the PyPI vllm wheel is
+# CUDA 13 (links libcudart.so.13, needs driver >=580) and won't run on driver 575
+# (CUDA 12.9 max). Use scripts/setup_env.sh, which installs vLLM's cu129 wheel VARIANT
+# from GitHub release assets. This extra exists only for newer-driver / CUDA-13 hosts.
+gpu = ["vllm"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+vob = "vob.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/vedanti02/vllm-optimization-bench"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

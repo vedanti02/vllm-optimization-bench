@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Env
+.env
+
+# Logs / SLURM
+logs/
+*.log
+*.err
+*.out
+
+# Raw per-run artifacts (large-ish JSON blobs kept out of git by default;
+# curated results/L40S/*.parquet are committed intentionally)
+results/**/raw/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Model / HF blobs must never enter the repo
+*.safetensors
+*.bin
+hf_cache/
+CLAUDE.md
+scratchpad.md

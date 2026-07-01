@@ -1,0 +1,43 @@
+# Workload shapes for `vllm bench serve`.
+# Each workload defines the request shape (input/output token lengths) and the
+# request generation pattern. Concurrency is an OFAT axis (configs/matrix.yaml),
+# so it is NOT fixed here — the runner injects --max-concurrency per cell.
+#
+# The four shapes are chosen to exercise distinct regimes:
+#   - chat        : balanced short in/out, the "default" interactive case
+#   - long_prompt : prefill-heavy (long context, short gen) — stresses prefill/chunking
+#   - long_decode : decode-heavy (short context, long gen)  — stresses spec-decode/KV
+#   - saturation  : many short requests — stresses continuous batching / scheduler
+#
+# num_prompts is the total request count sent per run; keep modest so a single
+# run stays within the ~5-8 min wall-clock target.
+
+defaults:
+  dataset: random           # vllm bench serve --dataset-name random
+  ignore_eos: true          # force full output length so decode work is deterministic
+  seed: 1234
+
+workloads:
+  chat:
+    description: "Balanced interactive chat: short prompt, short generation."
+    input_len: 256
+    output_len: 256
+    num_prompts: 200
+
+  long_prompt:
+    description: "Prefill-heavy: long context, short generation. Stresses prefill + chunked-prefill."
+    input_len: 4096
+    output_len: 128
+    num_prompts: 100
+
+  long_decode:
+    description: "Decode-heavy: short context, long generation. Stresses speculative decoding + KV growth."
+    input_len: 128
+    output_len: 2048
+    num_prompts: 100
+
+  saturation:
+    description: "Scheduler stress: many short requests. Stresses continuous batching / max-num-seqs."
+    input_len: 128
+    output_len: 128
+    num_prompts: 500

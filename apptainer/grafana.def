@@ -1,0 +1,20 @@
+# OPTIONAL (Phase 7, blog figures only). The primary telemetry path is
+# `dcgmi dmon` -> per-run CSV (src/vob/telemetry.py); this Grafana + dcgm-exporter
+# stack is only for live utilization/power dashboards when producing blog visuals.
+#
+# Build (no root needed on Babel):  apptainer build grafana.sif apptainer/grafana.def
+# The docker-compose stack from the original plan is NOT used (no docker on Babel).
+Bootstrap: docker
+From: grafana/grafana:latest
+
+%labels
+    Purpose "Optional Grafana dashboard for vLLM benchmark telemetry figures"
+
+%environment
+    export GF_SECURITY_ADMIN_PASSWORD=admin
+    export GF_PATHS_DATA=/tmp/grafana
+
+%runscript
+    exec grafana-server \
+        --homepath=/usr/share/grafana \
+        --config=/etc/grafana/grafana.ini "$@"
