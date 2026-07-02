@@ -1,4 +1,4 @@
-# vllm-optimization-bench — L40S results
+# vllm-optimization-bench: L40S results
 
 Total runs: **83**  |  status: {'ok': 83}
 
@@ -6,9 +6,17 @@ Total runs: **83**  |  status: {'ok': 83}
 - Failed cells: **0** ✅ clean
 
 ## Sanity checks
-- ✅ **FP8 >= BF16 throughput** — 67/67 workloads
-- ✅ **serialized << continuous batching** — mean serialized/continuous throughput ratio = 0.10
-- ✅ **energy rows have tokens/joule** — 83 energy-valid rows
+- ✅ **FP8 >= BF16 throughput**: 67/67 workloads
+- ✅ **serialized << continuous batching**: mean serialized/continuous throughput ratio = 0.10
+- ✅ **energy rows have tokens/joule**: 83 energy-valid rows
+
+## Key findings
+- FP8 raises output throughput over bf16 on every workload, by up to about 53 percent (on saturation).
+- FP8 raises energy efficiency (tokens/joule) by up to about 82 percent (on saturation).
+- Speculative decoding helps most on the decode heavy long_decode workload: ngram lifts throughput from about 570 to 1004 tokens per second.
+- On chat, ngram raises throughput but lowers tokens per joule, and EAGLE-3 gives little gain, so speculative decoding is not a universal win.
+- Continuous batching is the largest energy lever: chat tokens per joule rises from about 0.16 at concurrency 1 to 12.0 at concurrency 256.
+- FP8 quality cost is small: the largest perplexity increase over bf16 is about 4.5 percent, under the 5 percent gate, so the speed gains are not from a degraded checkpoint.
 
 ## OFAT: throughput & energy by precision (concurrency=16)
 ```
@@ -32,6 +40,18 @@ saturation  bf16                           666.3           192.4            22.7
             fp8-static                    1024.6           110.2            14.8               4.0
 ```
 
+![fp8_throughput.png](figures/fp8_throughput.png)
+
+*Figure: output throughput by workload and precision at concurrency 16. Every FP8 variant clears bf16 on every workload.*
+
+![fp8_energy.png](figures/fp8_energy.png)
+
+*Figure: tokens per joule by workload and precision at concurrency 16. FP8 improves energy efficiency the most on saturation and long_decode.*
+
+![latency_throughput.png](figures/latency_throughput.png)
+
+*Figure: decode latency (TPOT median) against output throughput at concurrency 16 (color is precision, marker shape is workload). FP8 points sit up and to the right of bf16 within each workload.*
+
 ## Speculative decoding (vs baseline)
 ```
                          output_throughput_tok_s  tokens_per_joule
@@ -48,6 +68,17 @@ saturation  eagle3                        623.13              1.93
             ngram                         737.34              2.38
             none                          666.29              2.17
 ```
+
+![speculative.png](figures/speculative.png)
+
+*Figure: throughput (left) and energy efficiency (right) for no speculation, ngram, and EAGLE-3 at concurrency 16 on bf16. Speculative decoding is a clear win on long_decode and mixed elsewhere; eagle3 with long_prompt is pruned.*
+
+## Continuous batching scaling
+bf16 throughput and tokens/joule at client concurrency 1, 16, and 256 (the concurrency axis plus the baseline point).
+
+![concurrency_scaling.png](figures/concurrency_scaling.png)
+
+*Figure: throughput (left) and energy efficiency (right) against client concurrency on a log x axis (bf16, one line per workload). Batching lifts both for chat, long_decode, and saturation, while long_prompt stays flat.*
 
 ## Energy headline (median + IQR across repeats)
 ```
@@ -98,6 +129,10 @@ chunked_x_longprompt        bf16        none long_prompt  2   0.636 0.629  0.643
        eagle3_energy        bf16      eagle3 long_decode  5   0.151 0.150  0.152 0.001
 ```
 
+![energy_frontier.png](figures/energy_frontier.png)
+
+*Figure: tokens per joule against output throughput across all runs, colored by precision. Efficiency tracks throughput; the highest points are bf16 at high concurrency, so batching is the largest single lever.*
+
 ## FP8 quality gate (perplexity vs BF16)
 ```
 bf16           ppl=7.952  (+0.0%)  flagged=False
@@ -106,4 +141,6 @@ fp8-dynamic    ppl=8.220  (+3.4%)  flagged=False
 fp8-kv         ppl=8.312  (+4.5%)  flagged=False
 ```
 
-![energy frontier](figures/energy_frontier.png)
+![quality.png](figures/quality.png)
+
+*Figure: perplexity by precision over 40 held out prompts. The dashed line is the plus 5 percent gate above the bf16 baseline; every FP8 variant sits under it.*
