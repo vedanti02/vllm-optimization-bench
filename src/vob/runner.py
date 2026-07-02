@@ -17,6 +17,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+# Per-concurrent-stream prompt budget. Total prompts scale with concurrency (floored)
+# so serialized/low-concurrency cells finish in bounded time. Throughput/latency/energy
+# are RATE metrics, so a smaller count at low concurrency doesn't bias them — it only
+# bounds duration and slightly widens stats noise (fine for these operating points).
+PROMPTS_PER_STREAM = 16
+MIN_PROMPTS = 16
+
+
+def effective_num_prompts(configured: int, concurrency: int, max_num_seqs: int = 10**9) -> int:
+    # Effective parallelism is bounded by BOTH the client concurrency and the server's
+    # max_num_seqs (max_num_seqs=1 serializes even with many clients), so scale by the min.
+    parallelism = min(concurrency, max_num_seqs)
+    return int(min(configured, max(MIN_PROMPTS, parallelism * PROMPTS_PER_STREAM)))
+
+
 def build_bench_command(cfg, shape: dict, *, base_url: str, result_path: str) -> list[str]:
     """Build the `vllm bench serve` argv from a RunConfig + workload shape.
 
@@ -25,6 +40,7 @@ def build_bench_command(cfg, shape: dict, *, base_url: str, result_path: str) ->
     host_port = base_url.replace("http://", "").split(":")
     host, port = host_port[0], host_port[1]
 
+    n_prompts = effective_num_prompts(shape["num_prompts"], cfg.concurrency, cfg.max_num_seqs)
     cmd = [
         "vllm", "bench", "serve",
         "--backend", "vllm",
@@ -34,7 +50,7 @@ def build_bench_command(cfg, shape: dict, *, base_url: str, result_path: str) ->
         "--dataset-name", shape.get("dataset", "random"),
         "--random-input-len", str(shape["input_len"]),
         "--random-output-len", str(shape["output_len"]),
-        "--num-prompts", str(shape["num_prompts"]),
+        "--num-prompts", str(n_prompts),
         "--max-concurrency", str(cfg.concurrency),
         "--seed", str(shape.get("seed", 1234)),
         "--save-result",

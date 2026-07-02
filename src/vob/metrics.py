@@ -15,9 +15,16 @@ from .telemetry import DCGM_FIELDS
 
 # Validity-gate thresholds (see scratchpad.md for how the SM-active threshold was
 # chosen empirically in Phase 2). Overridable via reduce_telemetry(..., gate=...).
+# Contamination gate: what makes a tokens/joule run untrustworthy on the shared node.
+# We flag ONLY on a directly-detectable hardware condition (thermal/HW clock throttle),
+# NOT on an absolute SM-active bar. Rationale: LLM decode is memory-bandwidth-bound, so
+# SM-active is legitimately 0.4-0.8 even when fully GPU-bound (fast fp8 sits lower still,
+# and low-concurrency runs lower by design). An absolute SM-active threshold conflates
+# "memory-bound" with "contaminated" and false-flags valid operating points. Residual
+# host-contention noise is surfaced by the energy repeats (median + IQR), per the plan.
 DEFAULT_GATE = {
-    "sm_active_min": 0.80,        # steady decode should keep SMs busy
-    "max_neighbor_power_w": None, # optional hard cap on neighbor draw
+    "energy_gpu_bound_min": 0.30, # INFORMATIONAL only: sets energy_gpu_bound flag, not status
+    "max_neighbor_power_w": None, # optional hard cap on neighbor draw (off by default)
     "allow_throttle": False,      # any thermal/HW throttle flag => contaminated
 }
 
@@ -89,12 +96,12 @@ def _steady_window(samples: list[float], skip_frac: float = 0.2) -> list[float]:
 
 
 def apply_validity_gate(reduced: dict, extras: dict, gate: dict) -> tuple[str, list[str]]:
-    """Return (status, reasons). status is 'ok' or 'contaminated'."""
-    reasons: list[str] = []
+    """Return (status, reasons). status is 'ok' or 'contaminated'.
 
-    sm = reduced.get("sm_active_steady_mean")
-    if sm is not None and sm < gate["sm_active_min"]:
-        reasons.append(f"sm_active {sm:.2f} < {gate['sm_active_min']} (GPU idle-waiting / host-bound)")
+    Contamination = a directly-detectable hardware condition only (thermal/HW throttle,
+    or an optional neighbor-power cap). SM-active is NOT a contamination criterion (see
+    DEFAULT_GATE); it feeds the informational energy_gpu_bound flag instead."""
+    reasons: list[str] = []
 
     tr = extras.get("throttle_reasons")
     # Bit 0 (GpuIdle) is benign; any hardware/thermal throttle bit is not.
@@ -135,6 +142,10 @@ def reduce_telemetry(csv_path: str | Path, extras: Optional[dict] = None,
     status, reasons = apply_validity_gate(out, extras, gate)
     out["status"] = status
     out["gate_reasons"] = "; ".join(reasons) if reasons else ""
+    # Informational: was the GPU meaningfully busy in steady decode? Used to annotate
+    # the operating point (low at low concurrency / fast fp8), NOT to gate validity.
+    sm = out.get("sm_active_steady_mean")
+    out["energy_gpu_bound"] = bool(sm is not None and sm >= gate["energy_gpu_bound_min"])
     return out
 
 
@@ -178,8 +189,16 @@ def build_record(cfg, bench: dict, telemetry: dict, *, pins: dict) -> dict[str, 
     record["bench_elapsed_s"] = bench.get("_elapsed_s")
     record.update(telemetry)
     record.update(pins)
-    # If the benchmark timed out (budget guard) it can't be a valid energy point.
+    # A timed-out bench has truncated/no data -> treat as a re-runnable failure, not an
+    # energy "contamination" (which is reserved for hardware throttle on a valid run).
     if record.get("bench_timed_out"):
-        record["status"] = "contaminated"
+        record["status"] = "failed"
         record["gate_reasons"] = (record.get("gate_reasons", "") + "; bench wall-clock cap exceeded").strip("; ")
+    # Defensive: a run where 0 requests completed is a FAILURE even though the server
+    # stayed up and `vllm bench serve` returned a JSON (e.g. every request 500'd). Never
+    # let a completed=0 / 0-throughput row masquerade as a valid 'ok' data point.
+    completed = record.get("completed")
+    if completed is not None and completed == 0:
+        record["status"] = "failed"
+        record["gate_reasons"] = (record.get("gate_reasons", "") + "; 0 requests completed (all errored)").strip("; ")
     return record

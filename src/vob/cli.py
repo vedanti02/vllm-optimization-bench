@@ -97,9 +97,11 @@ def run(
     only_source: Optional[str] = typer.Option(None, help="baseline|ofat|interaction — restrict to one group"),
     only_cell: Optional[str] = typer.Option(None, help="run only this cell_name (axis/interaction name)"),
     limit: Optional[int] = typer.Option(None, help="cap number of cells this invocation (smoke tests)"),
-    include_contaminated: bool = typer.Option(False, help="treat contaminated rows as complete (skip re-run)"),
+    rerun_contaminated: bool = typer.Option(False, help="also re-run cells previously marked contaminated/failed"),
 ):
     """Run pending cells INSIDE the current SLURM allocation, under the budget guard."""
+    # include_contaminated=True (default) => contaminated/failed count as complete (no loop).
+    include_contaminated = not rerun_contaminated
     matrix_cfg, workloads_cfg, configs, pruned = _load_configs(matrix, workloads)
     store = ResultStore(results)
     store.ensure_dirs()
@@ -135,7 +137,69 @@ def run(
         elapsed = _run_one(cfg, workloads_cfg, store, pins, per_run_cap_s, gate_cfg)
         spent_gpu_s += elapsed
 
+    store.export_parquet()  # rebuild aggregate runs.parquet from per-cell rows
     console.print(f"[bold green]done[/]; ~{spent_gpu_s/3600:.2f} GPU-h this store.")
+
+
+@app.command()
+def quality(
+    matrix: Path = typer.Option(_DEF_MATRIX),
+    results: Path = typer.Option(_DEF_RESULTS),
+    prompts: Path = typer.Option(_REPO / "configs" / "quality_prompts.txt"),
+    precisions: str = typer.Option("bf16,fp8-static,fp8-dynamic,fp8-kv"),
+):
+    """Phase 4.5 FP8 quality gate: perplexity of each precision vs BF16 (GPU job)."""
+    import json as _json
+
+    from . import quality as Q
+    from .matrix import RunConfig, resolve_models
+
+    matrix_cfg = load_yaml(matrix)
+    texts = [ln for ln in Path(prompts).read_text().splitlines() if ln.strip()]
+    console.print(f"quality gate: {len(texts)} prompts, precisions={precisions}")
+
+    out = []
+    for prec in [p.strip() for p in precisions.split(",") if p.strip()]:
+        cfg = resolve_models(RunConfig(precision=prec), matrix_cfg)
+        if not cfg.model_id:
+            console.print(f"  [yellow]skip[/] {prec}: no model resolved")
+            continue
+        console.print(f"  evaluating [cyan]{prec}[/] ({cfg.model_id}) kv={cfg.kv_cache_dtype}")
+        try:
+            r = Q.evaluate(prec, cfg.model_id, texts,
+                           quantization=cfg.quantization, kv_cache_dtype=cfg.kv_cache_dtype)
+        except Exception as e:
+            console.print(f"  [red]failed[/] {prec}: {e}")
+            continue
+        out.append(r)
+        console.print(f"    perplexity={r.perplexity:.4f}")
+
+    Q.compare(out)
+    recs = [r.__dict__ for r in out]
+    Path(results).mkdir(parents=True, exist_ok=True)
+    (Path(results) / "quality.json").write_text(_json.dumps(recs, indent=2, default=str))
+    for r in out:
+        flag = " [FLAGGED]" if r.flagged else ""
+        d = f"{r.perplexity_delta_pct:+.1f}%" if r.perplexity_delta_pct is not None else "baseline"
+        console.print(f"  {r.precision:14s} ppl={r.perplexity:.3f}  ({d} vs bf16){flag}")
+    console.print(f"[green]quality gate written -> {Path(results)/'quality.json'}[/]")
+
+
+@app.command()
+def merge(results: Path = typer.Option(_DEF_RESULTS)):
+    """Rebuild results/L40S/runs.parquet from the per-cell rows (use after array jobs)."""
+    df = ResultStore(results).export_parquet()
+    console.print(f"merged [bold]{len(df)}[/] rows -> runs.parquet")
+
+
+@app.command()
+def report(results: Path = typer.Option(_DEF_RESULTS)):
+    """Phase 7: audit + sanity checks + tables + figures -> results/L40S/RESULTS.md."""
+    from . import analyze as A
+    ResultStore(results).export_parquet()
+    md = A.build_report(results, quality_path=Path(results) / "quality.json")
+    console.print(md)
+    console.print(f"[green]wrote {Path(results)/'RESULTS.md'}[/]")
 
 
 def _prior_gpu_seconds(store: ResultStore) -> float:
@@ -172,7 +236,10 @@ def _run_one(cfg, workloads_cfg, store: ResultStore, pins: dict,
             "cell_id": cfg.cell_id, "cell_name": cfg.cell_name, "source": cfg.source,
             "workload": cfg.workload, "repeat_idx": cfg.repeat_idx,
             "precision": cfg.precision, "speculative": cfg.speculative,
-            "concurrency": cfg.concurrency, "status": "failed", "gate_reasons": str(e)[:300],
+            "chunked_prefill": cfg.chunked_prefill, "max_num_seqs": cfg.max_num_seqs,
+            "concurrency": cfg.concurrency, "kv_cache_dtype": cfg.kv_cache_dtype,
+            "model_id": cfg.model_id, "spec_model": cfg.spec_model,
+            "status": "failed", "gate_reasons": str(e)[:300],
             **pins,
         }
         console.print(f"    [red]failed[/]: {e}")

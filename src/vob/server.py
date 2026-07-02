@@ -22,6 +22,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# Context cap (see build_serve_command). Must exceed max workload input+output.
+MAX_MODEL_LEN = 8192
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -38,6 +42,14 @@ def build_serve_command(cfg, *, port: int) -> list[str]:
         raise ValueError(f"cfg has no resolved model_id (precision={cfg.precision})")
 
     cmd = ["vllm", "serve", cfg.model_id, "--port", str(port)]
+
+    # Cap context to fit our workloads (max is long_prompt 4096-in + long_decode
+    # 2048-out ~= 6k tokens). The model's native 131072 context needs ~16 GiB KV for a
+    # single full-length request, which does NOT fit alongside weights on a 48 GB L40S
+    # when chunked prefill is off or spec-decode reserves draft slots -> vLLM refuses to
+    # start ("KV cache needed > available"). 8192 leaves generous headroom and, because
+    # KV is block-allocated per actual sequence length, does not change short-seq results.
+    cmd += ["--max-model-len", str(MAX_MODEL_LEN)]
 
     if cfg.quantization:
         cmd += ["--quantization", cfg.quantization]

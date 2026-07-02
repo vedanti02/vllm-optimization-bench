@@ -1,0 +1,50 @@
+[
+  {
+    "precision": "bf16",
+    "model_id": "unsloth/Llama-3.1-8B-Instruct",
+    "perplexity": 7.9517944822326205,
+    "accuracy": null,
+    "n_prompts": 40,
+    "n_tasks": 0,
+    "perplexity_delta_pct": 0.0,
+    "accuracy_delta_pts": null,
+    "flagged": false,
+    "notes": []
+  },
+  {
+    "precision": "fp8-static",
+    "model_id": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8",
+    "perplexity": 8.258247559727577,
+    "accuracy": null,
+    "n_prompts": 40,
+    "n_tasks": 0,
+    "perplexity_delta_pct": 3.85,
+    "accuracy_delta_pts": null,
+    "flagged": false,
+    "notes": []
+  },
+  {
+    "precision": "fp8-dynamic",
+    "model_id": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
+    "perplexity": 8.22025338173345,
+    "accuracy": null,
+    "n_prompts": 40,
+    "n_tasks": 0,
+    "perplexity_delta_pct": 3.38,
+    "accuracy_delta_pts": null,
+    "flagged": false,
+    "notes": []
+  },
+  {
+    "precision": "fp8-kv",
+    "model_id": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8",
+    "perplexity": 8.311817321922893,
+    "accuracy": null,
+    "n_prompts": 40,
+    "n_tasks": 0,
+    "perplexity_delta_pct": 4.53,
+    "accuracy_delta_pts": null,
+    "flagged": false,
+    "notes": []
+  }
+]

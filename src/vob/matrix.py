@@ -147,7 +147,9 @@ def expand_matrix(matrix: dict, workloads: dict) -> tuple[list[RunConfig], list[
 
     def add(cfg: RunConfig) -> None:
         knobs = {k: getattr(cfg, k) for k in _KNOBS}
-        reason = _is_invalid(knobs, invalid)
+        # invalid_combos may also key on `workload` (e.g. eagle3 x long_prompt), so
+        # include it in the match dict.
+        reason = _is_invalid({**knobs, "workload": cfg.workload}, invalid)
         if reason:
             pruned.append({"knobs": knobs, "workload": cfg.workload, "reason": reason})
             return

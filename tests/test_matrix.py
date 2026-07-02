@@ -87,6 +87,15 @@ def test_cell_ids_unique_and_stable():
     assert {c.cell_id for c in configs} == {c.cell_id for c in again}
 
 
+def test_invalid_combo_can_key_on_workload():
+    invalid = [{"when": {"speculative": "eagle3", "workload": "chat"},
+                "reason": "planted: eagle3 x chat invalid"}]
+    configs, pruned = expand_matrix(_tiny_matrix(invalid), WORKLOADS)
+    # eagle3 chat cells pruned; eagle3 on other workloads (none here) unaffected
+    assert any(p["knobs"]["speculative"] == "eagle3" and p["workload"] == "chat" for p in pruned)
+    assert not any(c.speculative == "eagle3" and c.workload == "chat" for c in configs)
+
+
 def test_normalize_dependencies_is_noop_without_eagle3():
     knobs = {"speculative": "none", "chunked_prefill": True}
     notes = normalize_dependencies(knobs)

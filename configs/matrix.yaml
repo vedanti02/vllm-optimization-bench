@@ -15,9 +15,13 @@ model_family: llama-3.1-8b-instruct
 
 models:
   # Resolved from /data/hf_cache (read) or downloaded to $HF_HUB_CACHE on first use.
+  # NOTE: the RedHatAI FP8 checkpoints are `compressed-tensors` format with the quant
+  # method baked into their config. Passing --quantization fp8 CONFLICTS with that
+  # ("does not match ... compressed-tensors") and vLLM refuses to start. Leave
+  # quantization null so vLLM auto-detects it from the model config.
   bf16:        { id: "unsloth/Llama-3.1-8B-Instruct", quantization: null }
-  fp8-dynamic: { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic", quantization: "fp8" }
-  fp8-static:  { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8", quantization: "fp8" }
+  fp8-dynamic: { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic", quantization: null }
+  fp8-static:  { id: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8", quantization: null }
   # fp8+fp8-kv reuses the fp8-static weights but adds --kv-cache-dtype fp8.
 
 speculative_models:
@@ -92,13 +96,15 @@ ofat_workloads: [chat, long_prompt, long_decode, saturation]
 # List here only genuinely un-runnable combos. Each entry's `when` must match ALL
 # its keys against a config's knobs to prune it.
 invalid_combos:
-  # n-gram speculative decoding needs a real decode window to propose from; at
-  # max_num_seqs=1 with the prefill-heavy long_prompt shape it degenerates, but
-  # that is a workload interaction, not a hard invalid — left out on purpose.
-  # (Kept empty of structural prunes for now; unit tests plant their own combo.)
-  []
+  # EAGLE-3 forces chunked_prefill=False (normalize_dependencies). A single-batch
+  # prefill of the long_prompt shape (4096 tokens) then crashes the vLLM V1 engine
+  # core (fatal error in the eagle3 prefill step) -> 0 requests complete. Spec decode
+  # targets decode-heavy workloads anyway, so this combo is pruned, not benchmarked.
+  # `when` may key on knobs and/or `workload`.
+  - when: { speculative: eagle3, workload: long_prompt }
+    reason: "EAGLE-3 (chunked-prefill off) crashes vLLM V1 on a 4096-token single-batch prefill"
 
 # Cost-control guardrails enforced by cli.py / runner.py.
 budget:
   gpu_hours_ceiling: 20
-  per_run_wallclock_cap_s: 1200   # abort + log a run that overshoots
+  per_run_wallclock_cap_s: 1800   # abort + log a run that overshoots (serialized long_decode is slow)
